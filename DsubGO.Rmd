@@ -1,0 +1,255 @@
+---
+title: "Dsub GO"
+author: "Jorge Martínez Jordán"
+date: '2022-12-11'
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: 
+      collapsed: true
+      smooth_scroll: true
+    number_sections: true
+    theme: cerulean
+    highlight: textmate
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,message=FALSE, warning=FALSE)
+```
+
+```{r}
+# Se indica el directorio de trabajo donde se encuentran los archivos que se usarán en el análisis
+setwd("C:/Users/jorge/Desktop/UOC/TFM BM/R GO/proteinas D sub")
+```
+
+```{r}
+# Lectura de las anotaciones y obtención de la lista de genes en las inversiones U1 y U2 a partir de las anotaciones de la cepa UCBerk_Dsub_1.0 de D. subobscura
+# https://www.ncbi.nlm.nih.gov/genome/?term=txid7241[Organism:noexp]
+
+library(readr)
+proteins_table <- read_csv("proteins_64269_666799.csv")
+
+
+# Los genes de la inversión U1 se encuentran en el cromosoma U entre las posiciones 6419392-13846098
+proteinsU1 <- proteins_table[proteins_table[1] == "chromosome U" & proteins_table$Start > 6419392 & proteins_table$Stop < 13846098,]
+
+# Para el análisis necesitamos una lista de la ID de los genes contenidos en la inversión, eliminando las duplicaciones (para evitar aquellos genes que tienen más de un tránscrito).
+U1list <- proteinsU1[!duplicated(proteinsU1$GeneID), ]
+
+# Se sigue el mismo procedimiento para U2
+proteinsU2 <- proteins_table[proteins_table[1] == "chromosome U" & proteins_table$Start > 13869464 & proteins_table$Stop < 21253679,]
+
+U2list <- proteinsU2[!duplicated(proteinsU2$GeneID), ]
+
+```
+
+
+```{r}
+library(readr)
+
+# Se carga el archivo obtenido de eggNOG-mapper
+eggnog_data <- read_tsv("eggnog_data.tsv", skip = 4)
+```
+
+EggNOG-mapper es una aplicación web disponible en http://eggnog-mapper.embl.de/
+La aplicación permite obtener los términos GO de un genoma suministrando secuencias de proteínas, secuencias codificantes o secuencias genómicas.
+Para obtener el archivo usado en este estudio se han utilizado las secuencias de proteínas de la cepa de Berkley. 
+En los resultados no viene indicado a qué gen pertenencen, por lo que se procede a identificar el gen a partir del número de acceso de la proteína con la información de las anotaciones de la cepa.
+
+
+
+
+```{r}
+library(readr)
+library(dplyr)
+
+# FIltramos en las anotaciones de la cepa aquellas que se encuentran en el resultado de eggNOG-mapper
+
+proteins_table2 <- filter(proteins_table, proteins_table$`Protein product` %in% eggnog_data$`#query`)
+
+# Hay 36 proteínas que no han podido ser anotadas con la aplicacción eggNOG-mapper
+
+# Se añade la información de la ID del gen a los resultados de eggNOG en una nueva columna
+
+eggnog_data2 <- filter(eggnog_data, eggnog_data$`#query` %in% proteins_table2$`Protein product`)
+
+eggnog_data2 <- eggnog_data2[order(eggnog_data2$`#query`),]
+proteins_table2 <- proteins_table2[order(proteins_table2$`Protein product`),]
+
+eggnog_data2$GeneID <- proteins_table2$GeneID
+
+
+# Eliminamos los id de genes duplicados para quedarnos sólo con un tránscrito por gen
+
+eggnog_data2 <- eggnog_data2[!duplicated(eggnog_data2$GeneID), ]
+```
+
+La herramienta topGO permite realizar un análisis de ontología genética aportando una lista de anotaciones de términos GO personalizada, permitiendo así realizar el análisis con organismos no-modelo de los que no se dispone de bases de datos con anotaciones GO públicas.
+
+
+```{r}
+# Instalación del paquete y carga de los paquetes necesarios
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("topGO")
+
+
+library(tidyverse)
+library(topGO)
+library(lintr)
+library(lattice)
+library(dplyr)
+```
+
+```{r}
+
+# Los datos de entrada para topGO son una lista de genes de interés y el resto de genes con los que queremos comparar (universo de genes), con los términos GO asociados a esos genes. Generamos un objeto que contenga la lista de los genes con sus términos GO asociados.
+
+geneUniverse <- eggnog_data2[c(22,10)]
+write.table(geneUniverse, file = "geneUniverse.txt", append = FALSE, sep = "\t", row.names = FALSE, col.names = T)
+
+# Modificar archivo geneUniverse.txt para que tenga el formato correcto, eliminando comillas y el encabezado y reemplazando comas por coma y un espacio
+```
+
+
+
+```{r}
+# Para la lectura del archivo generado con el universo de genes se utiliza la función readMappings. El universo de genes se corresponde con todos aquellos de los que se dispone de anotaciones GO
+geneID2GO <- readMappings(file = "geneUniverseMod.txt") 
+geneUniverse <- names(geneID2GO) 
+```
+
+
+
+```{r}
+# Posteriormente, se proporciona la lista de genes de interés. 
+
+U1genes <- as.character(U1list$`GeneID`)
+geneListU1 <- factor(as.integer(geneUniverse %in% U1genes))
+names(geneListU1) <- geneUniverse
+
+U2genes <- as.character(U2list$GeneID)
+geneListU2 <- factor(as.integer(geneUniverse %in% U2genes))
+names(geneListU2) <- geneUniverse
+```
+
+
+```{r}
+# Una vez definidos los genes de interés y el universo de genes, se une todo en un objeto. En este punto se puede indicar la ontología genética de nuestro interés: "BP": Proceso biológico, "CC": Localización en componentes celulares o "MF": Función molecular
+
+U1GOdata <- new("topGOdata", description="Dsub U1", ontology="BP", allGenes=geneListU1,  annot = annFUN.gene2GO, gene2GO = geneID2GO)
+```
+
+
+
+```{r}
+# Realización del análisis de enriquecimiento
+resultFisherU1 <- runTest(U1GOdata, algorithm="classic", statistic="fisher")
+```
+
+
+
+```{r}
+# Es posible generar una tabla con los resultados obtenidos. En nuestro caso, se genera una tabla con los 20 primeros resultados por orden de significancia
+U1Res <- GenTable(U1GOdata, classicFisher = resultFisherU1, orderBy = "resultFisher", ranksOf = "classicFisher", topNodes = 20)
+U1Res
+
+write.table(U1Res, file = "U1Res.tsv", append = FALSE, sep = "\t", row.names = F, col.names = T)
+
+```
+
+
+
+```{r}
+# Configuración para el resultado gráfico
+dev.off()
+layout(t(1:2), widths=c(8,1))
+par(mar=c(4, .5, .7, .7), oma=c(3, 15, 3, 4), las=1)
+```
+
+
+```{r}
+# Se genera una paleta de color continua
+library(colorRamps)
+rbPal <- colorRampPalette(c ('red', 'white', 'blue' ))
+pvalue <- as.numeric (gsub ("<", "", U1Res$classicFisher)) # Elimina los símnolos '<'  
+max_value <- as.integer(max(-log(pvalue)))+1 
+pv_range <- exp(-seq(max_value, 0, -1)) 
+U1Res$Color <- rbPal(max_value)[cut(pvalue, pv_range)]
+
+```
+
+```{r}
+# Genera la figura
+o <- order (U1Res$Significant, decreasing = TRUE)
+barplot (U1Res$Significant[o], names.arg=U1Res$Term[o], las=2, horiz= TRUE, col=U1Res$Color[o],xlab= "Number of sequences", main="U1 Biological process", sub=geneUniverse, cex.names=0.85)
+```
+
+```{r}
+# Genera la leyenda
+image (0, seq(1, max_value), t(seq_along(seq(1, max_value) )), col=rev (rbPal(max_value) ), axes=FALSE, ann=FALSE) 
+pv_label <- exp(-seq(log(1), -log(min(pvalue)), l=6))
+pv_label <- formatC(pv_label, format = "e", digits = 2)
+axis(4, at=seq(1, max_value, length=6), labels=c(1, pv_label[2:6]), cex.axis=0.85)
+title ("p-value", cex.main = 0.8)
+```
+
+
+Se realiza el mismo análisis para la inversión U2
+
+```{r}
+U2GOdata <- new("topGOdata", description="Dsub U2", ontology="BP", allGenes=geneListU2,  annot = annFUN.gene2GO, gene2GO = geneID2GO)
+```
+
+
+```{r}
+resultFisherU2 <- runTest(U2GOdata, algorithm="classic", statistic="fisher")
+```
+
+
+```{r}
+U2Res <- GenTable(U2GOdata, classicFisher = resultFisherU2, orderBy = "resultFisher", ranksOf = "classicFisher", topNodes = 20)
+U2Res
+
+write.table(U2Res, file = "U2Res.tsv", append = FALSE, sep = "\t", row.names = F, col.names = T)
+```
+
+
+```{r}
+# Configuración para el resultado gráfico
+dev.off()
+layout(t(1:2), widths=c(8,1))
+par(mar=c(4, .5, .7, .7), oma=c(3, 15, 3, 4), las=1)
+```
+
+
+```{r}
+# Se genera una paleta de color continua
+library(colorRamps)
+rbPal <- colorRampPalette(c ('red', 'white', 'blue' ))
+pvalue <- as.numeric (gsub ("<", "", U2Res$classicFisher)) # Elimina los símnolos '<'  
+max_value <- as.integer(max(-log(pvalue)))+1 
+pv_range <- exp(-seq(max_value, 0, -1)) 
+U2Res$Color <- rbPal(max_value)[cut(pvalue, pv_range)]
+
+```
+
+```{r}
+# Genera la figura
+o <- order (U2Res$Significant, decreasing = TRUE)
+barplot (U2Res$Significant[o], names.arg=U2Res$Term[o], las=2, horiz= TRUE, col=U2Res$Color[o],xlab= "Number of sequences", main="U2 Biological process", sub=geneUniverse, cex.names=0.85)
+```
+
+```{r}
+# Genera la leyenda
+image (0, seq(1, max_value), t(seq_along(seq(1, max_value) )), col=rev (rbPal(max_value) ), axes=FALSE, ann=FALSE) 
+pv_label <- exp(-seq(log(1), -log(min(pvalue)), l=6))
+pv_label <- formatC(pv_label, format = "e", digits = 2)
+axis(4, at=seq(1, max_value, length=6), labels=c(1, pv_label[2:6]), cex.axis=0.85)
+title ("p-value", cex.main = 0.8)
+```
+
+
